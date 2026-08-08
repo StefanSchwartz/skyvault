@@ -133,20 +133,22 @@ export function PostCard({ post }) {
           </div>
         </div>
 
-        {/* Source Badge (Bookmark vs Like) */}
-        <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
-          {isBookmark ? '🔖 Saved' : '❤️ Liked'}
-        </span>
+        {/* Source Badge & External Link */}
+        <div className="post-header-actions">
+          <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
+            {isBookmark ? '🔖 Saved' : '❤️ Liked'}
+          </span>
 
-        <a
-          href={getBlueskyPostUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bsky-external-link-btn"
-          title="Open in Bluesky app"
-        >
-          <ExternalLink size={16} />
-        </a>
+          <a
+            href={getBlueskyPostUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bsky-external-link-btn"
+            title="Open in Bluesky app"
+          >
+            <ExternalLink size={16} />
+          </a>
+        </div>
       </header>
 
       {/* Main Content Body */}
