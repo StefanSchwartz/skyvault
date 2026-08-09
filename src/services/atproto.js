@@ -80,6 +80,77 @@ function extractQuotePostUri(post) {
 }
 
 /**
+ * Helper to batch-fetch post objects in chunks of 25 from agent.getPosts.
+ * Returns a Map mapping post URI -> postView object.
+ */
+async function batchFetchPosts(agent, uris, onError) {
+  const postsMap = new Map();
+  if (!uris || uris.length === 0) return postsMap;
+
+  const BATCH_SIZE = 25;
+  for (let i = 0; i < uris.length; i += BATCH_SIZE) {
+    const batch = uris.slice(i, i + BATCH_SIZE);
+    try {
+      const res = await agent.getPosts({ uris: batch });
+      for (const p of (res.data?.posts || [])) {
+        if (p?.uri) {
+          postsMap.set(p.uri, p);
+        }
+      }
+    } catch (err) {
+      if (onError) {
+        onError(err);
+      }
+    }
+  }
+  return postsMap;
+}
+
+/**
+ * Helper to attach SkyVault metadata tagging (bookmarkUri, savedAt, recordType) to a post object.
+ */
+function formatPostObject(postView, { bookmarkUri = null, savedAt = null, recordType }) {
+  if (!postView) return null;
+  return {
+    ...postView,
+    bookmarkUri: bookmarkUri || null,
+    savedAt: savedAt || new Date().toISOString(),
+    recordType
+  };
+}
+
+/**
+ * Generic page loop helper for record pagination up to maxLimit (default 500).
+ */
+async function fetchPagedRecords(agent, fetchPageFn, maxLimit = 500) {
+  const accumulated = [];
+  let cursor = undefined;
+  let pageNum = 0;
+
+  while (accumulated.length < maxLimit) {
+    pageNum++;
+    const result = await fetchPageFn(cursor, pageNum);
+    if (!result) break;
+
+    const { items, nextCursor, stop, earlyReturn } = result;
+    if (earlyReturn) {
+      return null;
+    }
+
+    if (items && items.length > 0) {
+      accumulated.push(...items);
+    }
+
+    if (stop || !nextCursor) {
+      break;
+    }
+    cursor = nextCursor;
+  }
+
+  return accumulated;
+}
+
+/**
  * Given a list of hydrated postView objects, batch-fetches any quoted post
  * targets that aren't already hydrated in the embed.
  */
@@ -97,16 +168,11 @@ async function enrichWithQuotedPosts(agent, posts) {
   if (quoteUrisNeeded.size > 0) {
     const urisArr = Array.from(quoteUrisNeeded);
     console.log(`[SkyVault Hydrator] Fetching ${urisArr.length} quoted post(s) not yet hydrated`);
-    const BATCH_SIZE = 25;
-    for (let i = 0; i < urisArr.length; i += BATCH_SIZE) {
-      try {
-        const res = await agent.getPosts({ uris: urisArr.slice(i, i + BATCH_SIZE) });
-        for (const qp of (res.data?.posts || [])) {
-          quotedPostsMap.set(qp.uri, qp);
-        }
-      } catch (err) {
-        console.warn('[SkyVault Hydrator] Failed to fetch quoted posts:', err.message);
-      }
+    const fetchedMap = await batchFetchPosts(agent, urisArr, (err) => {
+      console.warn('[SkyVault Hydrator] Failed to fetch quoted posts:', err.message);
+    });
+    for (const [uri, qp] of fetchedMap.entries()) {
+      quotedPostsMap.set(uri, qp);
     }
   }
 
@@ -136,12 +202,7 @@ export async function fetchSavedPosts(agent) {
   // console.group('%c[SkyVault Debug] Fetching Saved Bookmarks', 'color: #3b82f6; font-size: 13px; font-weight: bold;');
   // console.log('Handle:', agent.session?.handle, '| DID:', agent.session?.did);
 
-  const hydratedPosts = [];
-  let cursor = undefined;
-  let pageNum = 0;
-
-  while (hydratedPosts.length < 500) {
-    pageNum++;
+  const hydratedPosts = await fetchPagedRecords(agent, async (cursor, pageNum) => {
     // console.log(`[SkyVault Debug] Requesting bookmarks page ${pageNum} (cursor: ${cursor || 'start'})...`);
 
     let res = null;
@@ -152,12 +213,12 @@ export async function fetchSavedPosts(agent) {
       // console.log(`[SkyVault Debug] Page ${pageNum} raw response:`, res);
     } catch (err) {
       // console.error('[SkyVault Debug] getBookmarks call failed:', err.message, err);
-      break;
+      return { items: [], nextCursor: undefined, stop: true };
     }
 
     if (!res?.data) {
       // console.warn('[SkyVault Debug] Response had no data object:', res);
-      break;
+      return { items: [], nextCursor: undefined, stop: true };
     }
 
     const { bookmarks, cursor: nextCursor } = res.data;
@@ -165,9 +226,10 @@ export async function fetchSavedPosts(agent) {
 
     if (!Array.isArray(bookmarks) || bookmarks.length === 0) {
       // console.log('[SkyVault Debug] Empty bookmarks array — no more pages.');
-      break;
+      return { items: [], nextCursor: undefined, stop: true };
     }
 
+    const pageItems = [];
     for (let i = 0; i < bookmarks.length; i++) {
       const bm = bookmarks[i];
       // console.log(`[SkyVault Debug] Bookmark #${i + 1}:`, bm);
@@ -182,25 +244,24 @@ export async function fetchSavedPosts(agent) {
       }
 
       // Attach bookmark-specific metadata to the post object
-      hydratedPosts.push({
-        ...postView,
+      pageItems.push(formatPostObject(postView, {
         bookmarkUri: bm.subject?.uri || null,
         savedAt: bm.createdAt || new Date().toISOString(),
         recordType: 'bookmark'
-      });
+      }));
       // console.log(`  -> Added post: ${postView.uri}`);
     }
 
     if (!nextCursor) {
       // console.log('[SkyVault Debug] No nextCursor — reached last page.');
-      break;
     }
-    cursor = nextCursor;
-  }
+
+    return { items: pageItems, nextCursor, stop: false };
+  });
 
   // console.log(`[SkyVault Debug] Total bookmarks collected before quote enrichment: ${hydratedPosts.length}`);
 
-  const enriched = await enrichWithQuotedPosts(agent, hydratedPosts);
+  const enriched = await enrichWithQuotedPosts(agent, hydratedPosts || []);
   // console.log(`[SkyVault Debug] Final bookmark post count: ${enriched.length}`, enriched);
   console.groupEnd();
 
@@ -215,13 +276,8 @@ export async function fetchLikedPosts(agent) {
 
   console.group('%c[SkyVault Debug] Fetching Liked Posts', 'color: #ec4899; font-size: 13px; font-weight: bold;');
 
-  let cursor = undefined;
-  let pageNum = 0;
-  let hydratedPosts = [];
-
-  while (hydratedPosts.length < 500) {
+  const hydratedPosts = await fetchPagedRecords(agent, async (cursor, pageNum) => {
     const rawLikes = [];
-    pageNum++;
     console.log(`[SkyVault Debug] Requesting Liked Posts page ${pageNum} (cursor: ${cursor || 'start'})...`);
 
     let res = null;
@@ -240,7 +296,7 @@ export async function fetchLikedPosts(agent) {
 
     if (!res?.data) {
       console.warn('[SkyVault Debug] Response had no data object:', res);
-      break;
+      return { items: [], nextCursor: undefined, stop: true };
     }
 
     const { records, cursor: nextCursor } = res.data;
@@ -260,37 +316,34 @@ export async function fetchLikedPosts(agent) {
 
     if (rawLikes.length === 0) {
       console.groupEnd();
-      return [];
+      return { items: [], nextCursor: undefined, stop: true, earlyReturn: true };
     }
 
-    // Batch hydrate liked post URIs
-    const likedPostsMap = new Map();
-    const BATCH_SIZE = 25;
-    for (let i = 0; i < rawLikes.length; i += BATCH_SIZE) {
-      const batch = rawLikes.slice(i, i + BATCH_SIZE).map(l => l.subjectUri);
-      try {
-        const res = await agent.getPosts({ uris: batch });
-        for (const p of (res.data?.posts || [])) likedPostsMap.set(p.uri, p);
-      } catch (err) {
-        console.error('[SkyVault Debug] Failed to hydrate liked posts batch:', err);
-      }
-    }
+    // Batch hydrate liked post URIs using shared batchFetchPosts helper
+    const likedPostsMap = await batchFetchPosts(agent, rawLikes.map(l => l.subjectUri), (err) => {
+      console.error('[SkyVault Debug] Failed to hydrate liked posts batch:', err);
+    });
 
     const hydratedLikes = rawLikes
       .map(item => {
         const post = likedPostsMap.get(item.subjectUri);
-        if (!post) return null;
-        return { ...post, bookmarkUri: item.recordUri, savedAt: item.savedAt, recordType: 'like' };
+        return formatPostObject(post, {
+          bookmarkUri: item.recordUri,
+          savedAt: item.savedAt,
+          recordType: 'like'
+        });
       })
       .filter(Boolean);
 
-    hydratedPosts = hydratedPosts.concat(hydratedLikes);
-
     if (!nextCursor) {
       console.log('[SkyVault Debug] No nextCursor — reached last page.');
-      break;
     }
-    cursor = nextCursor;
+
+    return { items: hydratedLikes, nextCursor, stop: false };
+  });
+
+  if (hydratedPosts === null) {
+    return [];
   }
 
   const enriched = await enrichWithQuotedPosts(agent, hydratedPosts);
