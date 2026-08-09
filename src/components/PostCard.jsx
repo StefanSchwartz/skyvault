@@ -83,7 +83,7 @@ export function PostCard({ post }) {
     if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m`;
     if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h`;
     if (diffSeconds < 604800) return `${Math.floor(diffSeconds / 86400)}d`;
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const getBlueskyPostUrl = () => {
@@ -130,15 +130,14 @@ export function PostCard({ post }) {
             >
               {formatTime(createdAt)}
             </a>
+            <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
+              {isBookmark ? '🔖 Saved' : '❤️ Liked'}
+            </span>
           </div>
         </div>
 
         {/* Source Badge & External Link */}
         <div className="post-header-actions">
-          <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
-            {isBookmark ? '🔖 Saved' : '❤️ Liked'}
-          </span>
-
           <a
             href={getBlueskyPostUrl()}
             target="_blank"
