@@ -83,7 +83,7 @@ export function PostCard({ post }) {
     if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m`;
     if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h`;
     if (diffSeconds < 604800) return `${Math.floor(diffSeconds / 86400)}d`;
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const getBlueskyPostUrl = () => {
@@ -130,23 +130,24 @@ export function PostCard({ post }) {
             >
               {formatTime(createdAt)}
             </a>
+            <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
+              {isBookmark ? '🔖 Saved' : '❤️ Liked'}
+            </span>
           </div>
         </div>
 
-        {/* Source Badge (Bookmark vs Like) */}
-        <span className={`source-type-badge ${isBookmark ? 'badge-bookmark' : 'badge-like'}`}>
-          {isBookmark ? '🔖 Saved' : '❤️ Liked'}
-        </span>
-
-        <a
-          href={getBlueskyPostUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bsky-external-link-btn"
-          title="Open in Bluesky app"
-        >
-          <ExternalLink size={16} />
-        </a>
+        {/* Source Badge & External Link */}
+        <div className="post-header-actions">
+          <a
+            href={getBlueskyPostUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bsky-external-link-btn"
+            title="Open in Bluesky app"
+          >
+            <ExternalLink size={16} />
+          </a>
+        </div>
       </header>
 
       {/* Main Content Body */}
